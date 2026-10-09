@@ -11,6 +11,7 @@ builder.Services.AddDbContext<EventFlowDbContext>(options =>
         builder.Configuration.GetConnectionString("EventFlowDb")
         ?? throw new InvalidOperationException(
             "Connection string 'EventFlowDb' was not found.")));
+builder.Services.AddAutoMapper(typeof(Program).Assembly);
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
