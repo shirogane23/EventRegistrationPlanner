@@ -136,6 +136,69 @@ public sealed class EventsController : ControllerBase
         return ToActionResult(result);
     }
 
+    [HttpPost("{eventId:guid}/close")]
+    public Task<IActionResult> Close(Guid eventId, CancellationToken cancellationToken) =>
+        ExecuteLifecycleAsync(
+            eventId,
+            (ownerUserId, token) => _eventService.CloseAsync(eventId, ownerUserId, token),
+            cancellationToken);
+
+    [HttpPost("{eventId:guid}/postpone")]
+    public Task<IActionResult> Postpone(
+        Guid eventId,
+        EventPostponeRequest request,
+        CancellationToken cancellationToken) =>
+        ExecuteLifecycleAsync(
+            eventId,
+            (ownerUserId, token) => _eventService.PostponeAsync(eventId, ownerUserId, token),
+            cancellationToken);
+
+    [HttpPost("{eventId:guid}/cancel")]
+    public Task<IActionResult> Cancel(
+        Guid eventId,
+        EventCancelRequest request,
+        CancellationToken cancellationToken) =>
+        ExecuteLifecycleAsync(
+            eventId,
+            (ownerUserId, token) => _eventService.CancelAsync(eventId, ownerUserId, token),
+            cancellationToken);
+
+    [HttpPost("{eventId:guid}/reschedule")]
+    public async Task<IActionResult> Reschedule(
+        Guid eventId,
+        EventRescheduleRequest request,
+        CancellationToken cancellationToken)
+    {
+        var decision = await _authorizationService.RequireEventOwnerAsync(
+            HttpContext, eventId, cancellationToken);
+        if (!decision.Allowed)
+        {
+            return this.ToActionResult(decision);
+        }
+
+        var (_, user) = await _authorizationService.RequireUserAsync(
+            HttpContext, cancellationToken);
+        return ToActionResult(await _eventService.RescheduleAsync(
+            eventId, user!.UserId, request, cancellationToken));
+    }
+
+    private async Task<IActionResult> ExecuteLifecycleAsync(
+        Guid eventId,
+        Func<Guid, CancellationToken, Task<EventServiceResult<EventResponse>>> action,
+        CancellationToken cancellationToken)
+    {
+        var decision = await _authorizationService.RequireEventOwnerAsync(
+            HttpContext, eventId, cancellationToken);
+        if (!decision.Allowed)
+        {
+            return this.ToActionResult(decision);
+        }
+
+        var (_, user) = await _authorizationService.RequireUserAsync(
+            HttpContext, cancellationToken);
+        return ToActionResult(await action(user!.UserId, cancellationToken));
+    }
+
     private IActionResult ToActionResult(
         EventServiceResult<EventResponse> result)
     {
