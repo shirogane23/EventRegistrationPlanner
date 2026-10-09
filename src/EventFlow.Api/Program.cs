@@ -1,5 +1,6 @@
 using EventFlow.Api.Auth;
 using EventFlow.Api.Data;
+using EventFlow.Api.Services;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -14,6 +15,7 @@ builder.Services.AddDbContext<EventFlowDbContext>(options =>
             "Connection string 'EventFlowDb' was not found.")));
 builder.Services.AddScoped<IDemoIdentityResolver, DemoIdentityResolver>();
 builder.Services.AddScoped<EventFlowAuthorizationService>();
+builder.Services.AddScoped<EventService>();
 builder.Services.AddAutoMapper(typeof(Program).Assembly);
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
