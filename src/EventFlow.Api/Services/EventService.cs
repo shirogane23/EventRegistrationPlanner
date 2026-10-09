@@ -9,6 +9,9 @@ namespace EventFlow.Api.Services;
 public sealed class EventService
 {
     private const string ActiveStatus = "Active";
+    private const string ClosedStatus = "Closed";
+    private const string PostponedStatus = "Postponed";
+    private const string CancelledStatus = "Cancelled";
     private const string PublicVisibility = "Public";
     private readonly EventFlowDbContext _dbContext;
     private readonly IMapper _mapper;
@@ -184,6 +187,148 @@ public sealed class EventService
             _mapper.Map<EventResponse>(currentEvent));
     }
 
+    public Task<EventServiceResult<EventResponse>> CloseAsync(
+        Guid eventId,
+        Guid ownerUserId,
+        CancellationToken cancellationToken) =>
+        ChangeStatusAsync(
+            eventId,
+            ownerUserId,
+            ActiveStatus,
+            ClosedStatus,
+            "Only Active events may be closed.",
+            cancellationToken);
+
+    public Task<EventServiceResult<EventResponse>> PostponeAsync(
+        Guid eventId,
+        Guid ownerUserId,
+        CancellationToken cancellationToken) =>
+        ChangeStatusAsync(
+            eventId,
+            ownerUserId,
+            ActiveStatus,
+            PostponedStatus,
+            "Only Active events may be postponed.",
+            cancellationToken);
+
+    public Task<EventServiceResult<EventResponse>> CancelAsync(
+        Guid eventId,
+        Guid ownerUserId,
+        CancellationToken cancellationToken) =>
+        ChangeStatusAsync(
+            eventId,
+            ownerUserId,
+            null,
+            CancelledStatus,
+            "The event is already cancelled.",
+            cancellationToken);
+
+    public async Task<EventServiceResult<EventResponse>> RescheduleAsync(
+        Guid eventId,
+        Guid ownerUserId,
+        EventRescheduleRequest request,
+        CancellationToken cancellationToken)
+    {
+        var currentEvent = await _dbContext.Event
+            .SingleOrDefaultAsync(
+                candidate => candidate.EventId == eventId &&
+                              candidate.OwnerUserId == ownerUserId,
+                cancellationToken);
+
+        if (currentEvent is null)
+        {
+            return Failure("The owned event was not found.", EventServiceErrorCode.NotFound);
+        }
+
+        if (currentEvent.Status != PostponedStatus)
+        {
+            return Failure(
+                "Only Postponed events may be rescheduled.",
+                EventServiceErrorCode.Conflict);
+        }
+
+        var venueId = request.VenueId ?? currentEvent.VenueId;
+        var venue = await _dbContext.Venue
+            .SingleOrDefaultAsync(candidate => candidate.VenueId == venueId, cancellationToken);
+
+        if (venue is null)
+        {
+            return Failure("The selected venue was not found.", EventServiceErrorCode.NotFound);
+        }
+
+        if (currentEvent.Capacity > venue.Capacity)
+        {
+            return Failure(
+                "Event capacity cannot exceed venue capacity.",
+                EventServiceErrorCode.Conflict);
+        }
+
+        if (await HasOverlappingActiveEventAsync(
+                venueId,
+                request.StartUtc!.Value,
+                request.EndUtc!.Value,
+                cancellationToken,
+                eventId))
+        {
+            return Failure(
+                "The selected venue already has an overlapping active event.",
+                EventServiceErrorCode.Conflict);
+        }
+
+        currentEvent.VenueId = venueId;
+        currentEvent.StartUtc = DateTime.SpecifyKind(request.StartUtc.Value, DateTimeKind.Utc);
+        currentEvent.EndUtc = DateTime.SpecifyKind(request.EndUtc.Value, DateTimeKind.Utc);
+        currentEvent.RegistrationDeadlineUtc = DateTime.SpecifyKind(
+            request.RegistrationDeadlineUtc!.Value,
+            DateTimeKind.Utc);
+        currentEvent.Status = ActiveStatus;
+        currentEvent.UpdatedUtc = DateTime.UtcNow;
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        currentEvent.Venue = venue;
+        return EventServiceResult<EventResponse>.Success(
+            _mapper.Map<EventResponse>(currentEvent));
+    }
+
+    private async Task<EventServiceResult<EventResponse>> ChangeStatusAsync(
+        Guid eventId,
+        Guid ownerUserId,
+        string? requiredCurrentStatus,
+        string targetStatus,
+        string invalidStateMessage,
+        CancellationToken cancellationToken)
+    {
+        var currentEvent = await GetEventQuery()
+            .SingleOrDefaultAsync(
+                candidate => candidate.EventId == eventId &&
+                              candidate.OwnerUserId == ownerUserId,
+                cancellationToken);
+
+        if (currentEvent is null)
+        {
+            return Failure("The owned event was not found.", EventServiceErrorCode.NotFound);
+        }
+
+        if (currentEvent.Status == CancelledStatus ||
+            (requiredCurrentStatus is not null &&
+             currentEvent.Status != requiredCurrentStatus))
+        {
+            return Failure(invalidStateMessage, EventServiceErrorCode.Conflict);
+        }
+
+        currentEvent.Status = targetStatus;
+        currentEvent.UpdatedUtc = DateTime.UtcNow;
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        return EventServiceResult<EventResponse>.Success(
+            _mapper.Map<EventResponse>(currentEvent));
+    }
+
+    private static EventServiceResult<EventResponse> Failure(
+        string detail,
+        EventServiceErrorCode code) =>
+        EventServiceResult<EventResponse>.Failure(code, detail);
+
     private IQueryable<Event> GetEventQuery() =>
         _dbContext.Event
             .AsNoTracking()
@@ -194,11 +339,13 @@ public sealed class EventService
         Guid venueId,
         DateTime startUtc,
         DateTime endUtc,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        Guid? excludedEventId = null) =>
         _dbContext.Event.AnyAsync(
             currentEvent =>
                 currentEvent.VenueId == venueId &&
                 currentEvent.Status == ActiveStatus &&
+                (excludedEventId == null || currentEvent.EventId != excludedEventId) &&
                 currentEvent.StartUtc < endUtc &&
                 startUtc < currentEvent.EndUtc,
             cancellationToken);
