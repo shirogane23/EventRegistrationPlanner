@@ -99,6 +99,149 @@ public sealed class RegistrationsController : ControllerBase
             cancellationToken));
     }
 
+    [HttpGet("/api/events/{eventId:guid}/registrations")]
+    [ProducesResponseType(typeof(IReadOnlyList<OrganizerRegistrationResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetForOwnedEvent(
+        Guid eventId,
+        CancellationToken cancellationToken)
+    {
+        var decision = await _authorizationService.RequireEventOwnerAsync(
+            HttpContext,
+            eventId,
+            cancellationToken);
+
+        if (!decision.Allowed)
+        {
+            return this.ToActionResult(decision);
+        }
+
+        var (_, user) = await _authorizationService.RequireUserAsync(
+            HttpContext,
+            cancellationToken);
+
+        var result = await _registrationService.GetForOwnedEventAsync(
+            eventId,
+            user!.UserId,
+            cancellationToken);
+
+        return ToOrganizerListActionResult(result);
+    }
+
+    [HttpPost("{registrationId:guid}/approve")]
+    [ProducesResponseType(typeof(RegistrationResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Approve(
+        Guid registrationId,
+        CancellationToken cancellationToken)
+    {
+        var decision = await _authorizationService.RequireEventRegistrationOwnerAsync(
+            HttpContext,
+            registrationId,
+            cancellationToken);
+
+        if (!decision.Allowed)
+        {
+            return this.ToActionResult(decision);
+        }
+
+        var (_, user) = await _authorizationService.RequireUserAsync(
+            HttpContext,
+            cancellationToken);
+
+        return ToActionResult(await _registrationService.ApproveAsync(
+            registrationId,
+            user!.UserId,
+            cancellationToken));
+    }
+
+    [HttpPost("{registrationId:guid}/reject")]
+    [ProducesResponseType(typeof(RegistrationResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Reject(
+        Guid registrationId,
+        RegistrationActionRequest request,
+        CancellationToken cancellationToken)
+    {
+        return await ApplyOrganizerActionAsync(
+            registrationId,
+            (userId, token) => _registrationService.RejectAsync(
+                registrationId,
+                userId,
+                request.Reason,
+                token),
+            cancellationToken);
+    }
+
+    [HttpPost("{registrationId:guid}/organizer-cancel")]
+    [ProducesResponseType(typeof(RegistrationResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> CancelByOrganizer(
+        Guid registrationId,
+        RegistrationActionRequest request,
+        CancellationToken cancellationToken)
+    {
+        return await ApplyOrganizerActionAsync(
+            registrationId,
+            (userId, token) => _registrationService.CancelByOrganizerAsync(
+                registrationId,
+                userId,
+                request.Reason,
+                token),
+            cancellationToken);
+    }
+
+    private async Task<IActionResult> ApplyOrganizerActionAsync(
+        Guid registrationId,
+        Func<Guid, CancellationToken, Task<EventServiceResult<RegistrationResponse>>> action,
+        CancellationToken cancellationToken)
+    {
+        var decision = await _authorizationService.RequireEventRegistrationOwnerAsync(
+            HttpContext,
+            registrationId,
+            cancellationToken);
+
+        if (!decision.Allowed)
+        {
+            return this.ToActionResult(decision);
+        }
+
+        var (_, user) = await _authorizationService.RequireUserAsync(
+            HttpContext,
+            cancellationToken);
+
+        return ToActionResult(await action(user!.UserId, cancellationToken));
+    }
+
+    private IActionResult ToOrganizerListActionResult(
+        EventServiceResult<IReadOnlyList<OrganizerRegistrationResponse>> result)
+    {
+        if (result.Succeeded)
+        {
+            return Ok(result.Value);
+        }
+
+        return NotFound(new ProblemDetails
+        {
+            Status = StatusCodes.Status404NotFound,
+            Title = "Resource not found",
+            Detail = result.Error!.Detail
+        });
+    }
+
     private IActionResult ToActionResult(
         EventServiceResult<RegistrationResponse> result)
     {
@@ -106,7 +249,7 @@ public sealed class RegistrationsController : ControllerBase
         {
             return result.Value is null
                 ? NoContent()
-                : Ok(result.Value);
+                : StatusCode(StatusCodes.Status201Created, result.Value);
         }
 
         return result.Error!.Code == EventServiceErrorCode.NotFound

@@ -67,5 +67,11 @@ public sealed class EventFlowMappingProfile : Profile
             .ForMember(destination => destination.EventStartUtc, options => options.MapFrom(source => source.Event.StartUtc))
             .ForMember(destination => destination.EventEndUtc, options => options.MapFrom(source => source.Event.EndUtc))
             .ForMember(destination => destination.VenueName, options => options.MapFrom(source => source.Event.Venue.Name));
+
+        CreateMap<Registration, OrganizerRegistrationResponse>()
+            .ForMember(destination => destination.AttendeeDisplayName,
+                options => options.MapFrom(source => source.User.DisplayName))
+            .ForMember(destination => destination.AttendeeEmail,
+                options => options.MapFrom(source => source.User.Email));
     }
 }

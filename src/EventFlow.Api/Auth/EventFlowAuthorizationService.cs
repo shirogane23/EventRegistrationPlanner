@@ -113,4 +113,32 @@ public sealed class EventFlowAuthorizationService
             : AuthorizationDecision.Forbidden(
                 "Only the registration owner may perform this operation.");
     }
+
+    public async Task<AuthorizationDecision> RequireEventRegistrationOwnerAsync(
+        HttpContext httpContext,
+        Guid registrationId,
+        CancellationToken cancellationToken)
+    {
+        var (decision, user) = await RequireRoleAsync(
+            httpContext,
+            DemoIdentityConstants.OrganizerRole,
+            cancellationToken);
+
+        if (!decision.Allowed || user is null)
+        {
+            return decision;
+        }
+
+        var ownsEvent = await _dbContext.Registration
+            .AsNoTracking()
+            .AnyAsync(
+                registration => registration.RegistrationId == registrationId &&
+                                registration.Event.OwnerUserId == user.UserId,
+                cancellationToken);
+
+        return ownsEvent
+            ? AuthorizationDecision.Allow()
+            : AuthorizationDecision.Forbidden(
+                "Only the event owner may manage this registration.");
+    }
 }
