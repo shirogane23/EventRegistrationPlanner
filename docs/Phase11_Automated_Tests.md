@@ -1,7 +1,7 @@
 # Phase 11: Automated Tests
 
 Phase 11 adds the `EventFlow.Api.Tests` xUnit project to the solution. The
-tests use EF Core InMemory for isolated service tests, so they do not require
+tests use SQLite in-memory for isolated service tests, so they do not require
 SQL Server or launching the API executable.
 
 Run the complete suite from the repository root:
@@ -9,6 +9,11 @@ Run the complete suite from the repository root:
 ```powershell
 dotnet test .\EventFlow.sln
 ```
+
+The test fixture opens a dedicated SQLite in-memory connection per test and
+creates the EF Core schema before seeding data. SQLite supports the
+Serializable transaction used by registration creation, so the transaction
+tests exercise the same concurrency boundary as production.
 
 The current tests cover:
 

@@ -92,12 +92,15 @@ public sealed class RegistrationService
 
         var registration = new Registration
         {
+            RegistrationId = Guid.NewGuid(),
             EventId = eventId,
             UserId = userId,
             Status = status,
             ConfirmationReference = status == ConfirmedStatus
                 ? CreateConfirmationReference()
-                : null
+                : null,
+            CreatedUtc = now,
+            UpdatedUtc = now
         };
 
         _dbContext.Registration.Add(registration);

@@ -4,6 +4,7 @@ using EventFlow.Api.Mapping;
 using EventFlow.Api.Models;
 using EventFlow.Api.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Data.Sqlite;
 using Moq;
 
 namespace EventFlow.Api.Tests;
@@ -12,11 +13,18 @@ internal static class EventFlowTestData
 {
     public static EventFlowDbContext CreateContext()
     {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        connection.CreateFunction("sysutcdatetime", () => DateTime.UtcNow);
+        connection.CreateFunction("newsequentialid", () => Guid.NewGuid());
+
         var options = new DbContextOptionsBuilder<EventFlowDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .UseSqlite(connection)
             .Options;
 
-        return new EventFlowDbContext(options);
+        var context = new EventFlowDbContext(options);
+        context.Database.EnsureCreated();
+        return context;
     }
 
     public static IMapper CreateMapper() =>
