@@ -9,6 +9,7 @@ namespace EventFlow.Api.Controllers;
 [Route("api/events")]
 public sealed class EventsController : ControllerBase
 {
+    // Controllers coordinate HTTP concerns. Business rules remain in EventService.
     private readonly EventFlowAuthorizationService _authorizationService;
     private readonly EventService _eventService;
 
@@ -25,6 +26,7 @@ public sealed class EventsController : ControllerBase
     public async Task<IActionResult> Search(
         [FromQuery] string? title,
         CancellationToken cancellationToken) =>
+        // Public search does not require an identity header.
         Ok(await _eventService.SearchPublicAsync(title, cancellationToken));
 
     [HttpGet("{eventId:guid}")]
@@ -34,6 +36,7 @@ public sealed class EventsController : ControllerBase
         Guid eventId,
         CancellationToken cancellationToken)
     {
+        // The service applies the direct-lookup visibility and lifecycle rules.
         var result = await _eventService.GetPublicAsync(
             eventId,
             cancellationToken);
@@ -51,6 +54,7 @@ public sealed class EventsController : ControllerBase
         EventCreateRequest request,
         CancellationToken cancellationToken)
     {
+        // Only an authenticated organizer may create an event.
         var (decision, user) = await _authorizationService.RequireRoleAsync(
             HttpContext,
             DemoIdentityConstants.OrganizerRole,
@@ -58,9 +62,11 @@ public sealed class EventsController : ControllerBase
 
         if (!decision.Allowed || user is null)
         {
+            // This returns 401 for identity failures and 403 for role failures.
             return this.ToActionResult(decision);
         }
 
+        // The resolved user ID, not a client field, becomes the event owner.
         var result = await _eventService.CreateAsync(
             request,
             user.UserId,
@@ -68,9 +74,11 @@ public sealed class EventsController : ControllerBase
 
         if (!result.Succeeded)
         {
+            // Service conflicts include invalid venues, capacity, and schedules.
             return ToActionResult(result);
         }
 
+        // CreatedAtAction returns 201 and a link to retrieve the new event.
         return CreatedAtAction(
             nameof(Get),
             new { eventId = result.Value!.EventId },
@@ -86,6 +94,7 @@ public sealed class EventsController : ControllerBase
         Guid eventId,
         CancellationToken cancellationToken)
     {
+        // Role authorization confirms the caller is an organizer.
         var (decision, user) = await _authorizationService.RequireRoleAsync(
             HttpContext,
             DemoIdentityConstants.OrganizerRole,
@@ -96,6 +105,7 @@ public sealed class EventsController : ControllerBase
             return this.ToActionResult(decision);
         }
 
+        // EventService also enforces that this organizer owns the event.
         return ToActionResult(await _eventService.GetOwnedAsync(
             eventId,
             user.UserId,
@@ -113,6 +123,7 @@ public sealed class EventsController : ControllerBase
         EventUpdateRequest request,
         CancellationToken cancellationToken)
     {
+        // Ownership is checked before any update is sent to the service layer.
         var decision = await _authorizationService.RequireEventOwnerAsync(
             HttpContext,
             eventId,
@@ -123,6 +134,7 @@ public sealed class EventsController : ControllerBase
             return this.ToActionResult(decision);
         }
 
+        // The owner ID is used again by the service to scope the database query.
         var (_, user) = await _authorizationService.RequireUserAsync(
             HttpContext,
             cancellationToken);
@@ -138,6 +150,8 @@ public sealed class EventsController : ControllerBase
 
     [HttpPost("{eventId:guid}/close")]
     public Task<IActionResult> Close(Guid eventId, CancellationToken cancellationToken) =>
+        // Closing is an owner-only lifecycle transition; the service validates
+        // that the current state is Active.
         ExecuteLifecycleAsync(
             eventId,
             (ownerUserId, token) => _eventService.CloseAsync(eventId, ownerUserId, token),
@@ -148,6 +162,8 @@ public sealed class EventsController : ControllerBase
         Guid eventId,
         EventPostponeRequest request,
         CancellationToken cancellationToken) =>
+        // The reason is validated by model binding; status transition rules are
+        // enforced by EventService.
         ExecuteLifecycleAsync(
             eventId,
             (ownerUserId, token) => _eventService.PostponeAsync(eventId, ownerUserId, token),
@@ -158,6 +174,7 @@ public sealed class EventsController : ControllerBase
         Guid eventId,
         EventCancelRequest request,
         CancellationToken cancellationToken) =>
+        // Cancellation preserves registrations and changes only the event state.
         ExecuteLifecycleAsync(
             eventId,
             (ownerUserId, token) => _eventService.CancelAsync(eventId, ownerUserId, token),
@@ -169,6 +186,8 @@ public sealed class EventsController : ControllerBase
         EventRescheduleRequest request,
         CancellationToken cancellationToken)
     {
+        // Rescheduling has its own request because it changes schedule and
+        // optionally venue, then reactivates a postponed event.
         var decision = await _authorizationService.RequireEventOwnerAsync(
             HttpContext, eventId, cancellationToken);
         if (!decision.Allowed)
@@ -176,6 +195,7 @@ public sealed class EventsController : ControllerBase
             return this.ToActionResult(decision);
         }
 
+        // The request DTO has already passed automatic validation at this point.
         var (_, user) = await _authorizationService.RequireUserAsync(
             HttpContext, cancellationToken);
         return ToActionResult(await _eventService.RescheduleAsync(
@@ -187,6 +207,8 @@ public sealed class EventsController : ControllerBase
         Func<Guid, CancellationToken, Task<EventServiceResult<EventResponse>>> action,
         CancellationToken cancellationToken)
     {
+        // This helper keeps authorization behavior identical for close,
+        // postpone, and cancel endpoints.
         var decision = await _authorizationService.RequireEventOwnerAsync(
             HttpContext, eventId, cancellationToken);
         if (!decision.Allowed)
@@ -194,6 +216,7 @@ public sealed class EventsController : ControllerBase
             return this.ToActionResult(decision);
         }
 
+        // The callback lets each endpoint select its specific service operation.
         var (_, user) = await _authorizationService.RequireUserAsync(
             HttpContext, cancellationToken);
         return ToActionResult(await action(user!.UserId, cancellationToken));
@@ -204,9 +227,11 @@ public sealed class EventsController : ControllerBase
     {
         if (result.Succeeded)
         {
+            // Successful service results are converted into HTTP 200 responses.
             return Ok(result.Value);
         }
 
+        // Service errors are translated into stable Problem Details responses.
         return result.Error!.Code == EventServiceErrorCode.NotFound
             ? NotFound(new ProblemDetails
             {

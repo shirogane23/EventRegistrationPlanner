@@ -9,6 +9,7 @@ namespace EventFlow.Api.Controllers;
 [Route("api/registrations")]
 public sealed class RegistrationsController : ControllerBase
 {
+    // Authorization is kept separate from registration business rules.
     private readonly EventFlowAuthorizationService _authorizationService;
     private readonly RegistrationService _registrationService;
 
@@ -31,6 +32,7 @@ public sealed class RegistrationsController : ControllerBase
         RegistrationCreateRequest request,
         CancellationToken cancellationToken)
     {
+        // Registration creation is restricted to the Attendee role.
         var (decision, user) = await _authorizationService.RequireRoleAsync(
             HttpContext,
             DemoIdentityConstants.AttendeeRole,
@@ -41,6 +43,8 @@ public sealed class RegistrationsController : ControllerBase
             return this.ToActionResult(decision);
         }
 
+        // The route supplies the event and the resolved identity supplies the
+        // attendee; the request body cannot overpost server-owned fields.
         var result = await _registrationService.CreateAsync(
             eventId,
             user.UserId,
@@ -55,6 +59,7 @@ public sealed class RegistrationsController : ControllerBase
     public async Task<IActionResult> GetCurrent(
         CancellationToken cancellationToken)
     {
+        // Any authenticated user can read only their own current registrations.
         var (decision, user) = await _authorizationService.RequireUserAsync(
             HttpContext,
             cancellationToken);
@@ -64,6 +69,7 @@ public sealed class RegistrationsController : ControllerBase
             return this.ToActionResult(decision);
         }
 
+        // Cancelled historical rows are intentionally excluded by the service.
         return Ok(await _registrationService.GetCurrentAsync(
             user.UserId,
             cancellationToken));
@@ -79,6 +85,8 @@ public sealed class RegistrationsController : ControllerBase
         Guid registrationId,
         CancellationToken cancellationToken)
     {
+        // This check prevents one attendee from cancelling another attendee's
+        // registration before the service changes its status.
         var decision = await _authorizationService.RequireRegistrationOwnerAsync(
             HttpContext,
             registrationId,
@@ -89,6 +97,7 @@ public sealed class RegistrationsController : ControllerBase
             return this.ToActionResult(decision);
         }
 
+        // Cancellation is a status transition; the database row is preserved.
         var (_, user) = await _authorizationService.RequireUserAsync(
             HttpContext,
             cancellationToken);
@@ -108,6 +117,8 @@ public sealed class RegistrationsController : ControllerBase
         Guid eventId,
         CancellationToken cancellationToken)
     {
+        // Only the event owner can see the complete guest list, including
+        // cancelled rows retained for history.
         var decision = await _authorizationService.RequireEventOwnerAsync(
             HttpContext,
             eventId,
@@ -118,6 +129,7 @@ public sealed class RegistrationsController : ControllerBase
             return this.ToActionResult(decision);
         }
 
+        // The service returns attendee details and status-based capacity data.
         var (_, user) = await _authorizationService.RequireUserAsync(
             HttpContext,
             cancellationToken);
@@ -140,6 +152,8 @@ public sealed class RegistrationsController : ControllerBase
         Guid registrationId,
         CancellationToken cancellationToken)
     {
+        // Approval is an organizer operation on a registration belonging to
+        // one of that organizer's events.
         var decision = await _authorizationService.RequireEventRegistrationOwnerAsync(
             HttpContext,
             registrationId,
@@ -150,6 +164,8 @@ public sealed class RegistrationsController : ControllerBase
             return this.ToActionResult(decision);
         }
 
+        // The service verifies Pending status and creates the confirmation
+        // reference when the transition succeeds.
         var (_, user) = await _authorizationService.RequireUserAsync(
             HttpContext,
             cancellationToken);
@@ -172,6 +188,8 @@ public sealed class RegistrationsController : ControllerBase
         RegistrationActionRequest request,
         CancellationToken cancellationToken)
     {
+        // Rejection requires a validated reason and becomes a Cancelled record
+        // rather than deleting registration history.
         return await ApplyOrganizerActionAsync(
             registrationId,
             (userId, token) => _registrationService.RejectAsync(
@@ -194,6 +212,8 @@ public sealed class RegistrationsController : ControllerBase
         RegistrationActionRequest request,
         CancellationToken cancellationToken)
     {
+        // Organizer cancellation also requires a reason and releases capacity
+        // by changing the status to Cancelled.
         return await ApplyOrganizerActionAsync(
             registrationId,
             (userId, token) => _registrationService.CancelByOrganizerAsync(
@@ -209,6 +229,7 @@ public sealed class RegistrationsController : ControllerBase
         Func<Guid, CancellationToken, Task<EventServiceResult<RegistrationResponse>>> action,
         CancellationToken cancellationToken)
     {
+        // Shared helper for organizer rejection and organizer cancellation.
         var decision = await _authorizationService.RequireEventRegistrationOwnerAsync(
             HttpContext,
             registrationId,
@@ -219,6 +240,7 @@ public sealed class RegistrationsController : ControllerBase
             return this.ToActionResult(decision);
         }
 
+        // The callback selects the exact business operation after authorization.
         var (_, user) = await _authorizationService.RequireUserAsync(
             HttpContext,
             cancellationToken);
@@ -231,9 +253,11 @@ public sealed class RegistrationsController : ControllerBase
     {
         if (result.Succeeded)
         {
+            // The list endpoint returns the complete organizer guest list.
             return Ok(result.Value);
         }
 
+        // An event outside the organizer's ownership scope is not exposed.
         return NotFound(new ProblemDetails
         {
             Status = StatusCodes.Status404NotFound,
@@ -247,11 +271,15 @@ public sealed class RegistrationsController : ControllerBase
     {
         if (result.Succeeded)
         {
+            // Registration creation returns the created resource; other
+            // controller actions reuse this mapper for their result shape.
             return result.Value is null
                 ? NoContent()
                 : StatusCode(StatusCodes.Status201Created, result.Value);
         }
 
+        // NotFound and Conflict are deliberately represented as Problem Details
+        // so Swagger and clients receive a predictable error contract.
         return result.Error!.Code == EventServiceErrorCode.NotFound
             ? NotFound(new ProblemDetails
             {

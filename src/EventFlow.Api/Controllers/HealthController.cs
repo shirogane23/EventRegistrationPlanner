@@ -8,6 +8,9 @@ namespace EventFlow.Api.Controllers;
 [Route("api/health")]
 public sealed class HealthController : ControllerBase
 {
+    // The controller receives the database context through dependency injection.
+    // This keeps the health check connected to the same database configuration as
+    // the rest of the API.
     private readonly EventFlowDbContext _dbContext;
 
     public HealthController(EventFlowDbContext dbContext)
@@ -23,11 +26,14 @@ public sealed class HealthController : ControllerBase
     [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
     public async Task<IActionResult> Get(CancellationToken cancellationToken)
     {
+        // CanConnectAsync checks the database without loading application data.
         var databaseAvailable =
             await _dbContext.Database.CanConnectAsync(cancellationToken);
 
         if (!databaseAvailable)
         {
+            // 503 tells monitoring clients that the API is running but its
+            // required database dependency is unavailable.
             return StatusCode(StatusCodes.Status503ServiceUnavailable, new
             {
                 status = "Unavailable",
@@ -35,6 +41,7 @@ public sealed class HealthController : ControllerBase
             });
         }
 
+        // A successful response confirms both API availability and connectivity.
         return Ok(new
         {
             status = "Healthy",
