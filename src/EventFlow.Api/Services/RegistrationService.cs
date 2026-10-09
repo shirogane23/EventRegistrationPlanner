@@ -16,11 +16,16 @@ public sealed class RegistrationService
 
     private readonly EventFlowDbContext _dbContext;
     private readonly IMapper _mapper;
+    private readonly INotificationService _notificationService;
 
-    public RegistrationService(EventFlowDbContext dbContext, IMapper mapper)
+    public RegistrationService(
+        EventFlowDbContext dbContext,
+        IMapper mapper,
+        INotificationService notificationService)
     {
         _dbContext = dbContext;
         _mapper = mapper;
+        _notificationService = notificationService;
     }
 
     public async Task<EventServiceResult<RegistrationResponse>> CreateAsync(
@@ -99,6 +104,11 @@ public sealed class RegistrationService
         await _dbContext.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
+        if (status == ConfirmedStatus)
+        {
+            await _notificationService.SendConfirmationAsync(registration, cancellationToken);
+        }
+
         return await GetByIdAsync(
             registration.RegistrationId,
             userId,
@@ -158,6 +168,9 @@ public sealed class RegistrationService
         registration.DecisionReason = "Cancelled by attendee.";
         registration.UpdatedUtc = DateTime.UtcNow;
         await _dbContext.SaveChangesAsync(cancellationToken);
+        await _notificationService.SendRegistrationCancellationAsync(
+            registration,
+            cancellationToken);
 
         return await GetByIdAsync(
             registrationId,
@@ -249,6 +262,9 @@ public sealed class RegistrationService
         registration.DecisionReason = reason;
         registration.UpdatedUtc = DateTime.UtcNow;
         await _dbContext.SaveChangesAsync(cancellationToken);
+        await _notificationService.SendRegistrationCancellationAsync(
+            registration,
+            cancellationToken);
 
         return await GetByIdAsync(
             registrationId,
@@ -297,6 +313,17 @@ public sealed class RegistrationService
             : null;
         registration.UpdatedUtc = DateTime.UtcNow;
         await _dbContext.SaveChangesAsync(cancellationToken);
+
+        if (targetStatus == ConfirmedStatus)
+        {
+            await _notificationService.SendConfirmationAsync(registration, cancellationToken);
+        }
+        else
+        {
+            await _notificationService.SendRegistrationCancellationAsync(
+                registration,
+                cancellationToken);
+        }
 
         return await GetByIdAsync(
             registrationId,

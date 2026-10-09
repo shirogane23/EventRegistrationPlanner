@@ -15,11 +15,16 @@ public sealed class EventService
     private const string PublicVisibility = "Public";
     private readonly EventFlowDbContext _dbContext;
     private readonly IMapper _mapper;
+    private readonly INotificationService _notificationService;
 
-    public EventService(EventFlowDbContext dbContext, IMapper mapper)
+    public EventService(
+        EventFlowDbContext dbContext,
+        IMapper mapper,
+        INotificationService notificationService)
     {
         _dbContext = dbContext;
         _mapper = mapper;
+        _notificationService = notificationService;
     }
 
     public async Task<IReadOnlyList<EventSummaryResponse>> SearchPublicAsync(
@@ -286,6 +291,11 @@ public sealed class EventService
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         currentEvent.Venue = venue;
+        await _notificationService.SendEventUpdateAsync(
+            currentEvent,
+            await GetActiveRegistrationsAsync(eventId, cancellationToken),
+            "Rescheduled",
+            cancellationToken);
         return EventServiceResult<EventResponse>.Success(
             _mapper.Map<EventResponse>(currentEvent));
     }
@@ -320,6 +330,17 @@ public sealed class EventService
         currentEvent.UpdatedUtc = DateTime.UtcNow;
         await _dbContext.SaveChangesAsync(cancellationToken);
 
+        var notificationType = targetStatus == CancelledStatus
+            ? "EventCancelled"
+            : targetStatus == PostponedStatus
+                ? "EventPostponed"
+                : "EventUpdated";
+        await _notificationService.SendEventUpdateAsync(
+            currentEvent,
+            await GetActiveRegistrationsAsync(eventId, cancellationToken),
+            notificationType,
+            cancellationToken);
+
         return EventServiceResult<EventResponse>.Success(
             _mapper.Map<EventResponse>(currentEvent));
     }
@@ -328,6 +349,16 @@ public sealed class EventService
         string detail,
         EventServiceErrorCode code) =>
         EventServiceResult<EventResponse>.Failure(code, detail);
+
+    private Task<List<Registration>> GetActiveRegistrationsAsync(
+        Guid eventId,
+        CancellationToken cancellationToken) =>
+        _dbContext.Registration
+            .Where(registration =>
+                registration.EventId == eventId &&
+                (registration.Status == "Pending" ||
+                 registration.Status == "Confirmed"))
+            .ToListAsync(cancellationToken);
 
     private IQueryable<Event> GetEventQuery() =>
         _dbContext.Event

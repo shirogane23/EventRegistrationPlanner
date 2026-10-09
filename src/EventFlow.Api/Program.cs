@@ -17,6 +17,7 @@ builder.Services.AddScoped<IDemoIdentityResolver, DemoIdentityResolver>();
 builder.Services.AddScoped<EventFlowAuthorizationService>();
 builder.Services.AddScoped<EventService>();
 builder.Services.AddScoped<RegistrationService>();
+builder.Services.AddScoped<INotificationService, LoggingNotificationService>();
 builder.Services.AddAutoMapper(typeof(Program).Assembly);
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
