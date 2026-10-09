@@ -165,6 +165,156 @@ public sealed class RegistrationService
             cancellationToken);
     }
 
+    public async Task<EventServiceResult<IReadOnlyList<OrganizerRegistrationResponse>>> GetForOwnedEventAsync(
+        Guid eventId,
+        Guid ownerUserId,
+        CancellationToken cancellationToken)
+    {
+        var ownsEvent = await _dbContext.Event
+            .AsNoTracking()
+            .AnyAsync(
+                currentEvent => currentEvent.EventId == eventId &&
+                                currentEvent.OwnerUserId == ownerUserId,
+                cancellationToken);
+
+        if (!ownsEvent)
+        {
+            return EventServiceResult<IReadOnlyList<OrganizerRegistrationResponse>>.Failure(
+                EventServiceErrorCode.NotFound,
+                "The event was not found.");
+        }
+
+        var registrations = await _dbContext.Registration
+            .AsNoTracking()
+            .Include(registration => registration.User)
+            .Where(registration => registration.EventId == eventId)
+            .OrderBy(registration => registration.Status)
+            .ThenBy(registration => registration.CreatedUtc)
+            .ToListAsync(cancellationToken);
+
+        return EventServiceResult<IReadOnlyList<OrganizerRegistrationResponse>>.Success(
+            _mapper.Map<IReadOnlyList<OrganizerRegistrationResponse>>(registrations));
+    }
+
+    public Task<EventServiceResult<RegistrationResponse>> ApproveAsync(
+        Guid registrationId,
+        Guid ownerUserId,
+        CancellationToken cancellationToken) =>
+        TransitionPendingAsync(
+            registrationId,
+            ownerUserId,
+            ConfirmedStatus,
+            null,
+            cancellationToken);
+
+    public Task<EventServiceResult<RegistrationResponse>> RejectAsync(
+        Guid registrationId,
+        Guid ownerUserId,
+        string reason,
+        CancellationToken cancellationToken) =>
+        TransitionPendingAsync(
+            registrationId,
+            ownerUserId,
+            CancelledStatus,
+            reason,
+            cancellationToken);
+
+    public async Task<EventServiceResult<RegistrationResponse>> CancelByOrganizerAsync(
+        Guid registrationId,
+        Guid ownerUserId,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        var registration = await GetOwnedRegistrationAsync(
+            registrationId,
+            ownerUserId,
+            cancellationToken);
+
+        if (registration is null)
+        {
+            return Failure(
+                EventServiceErrorCode.NotFound,
+                "The registration was not found.");
+        }
+
+        if (registration.Status != PendingStatus &&
+            registration.Status != ConfirmedStatus)
+        {
+            return Failure(
+                EventServiceErrorCode.Conflict,
+                "Only Pending or Confirmed registrations may be cancelled.");
+        }
+
+        registration.Status = CancelledStatus;
+        registration.DecisionReason = reason;
+        registration.UpdatedUtc = DateTime.UtcNow;
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        return await GetByIdAsync(
+            registrationId,
+            registration.UserId,
+            cancellationToken);
+    }
+
+    private async Task<EventServiceResult<RegistrationResponse>> TransitionPendingAsync(
+        Guid registrationId,
+        Guid ownerUserId,
+        string targetStatus,
+        string? reason,
+        CancellationToken cancellationToken)
+    {
+        var registration = await GetOwnedRegistrationAsync(
+            registrationId,
+            ownerUserId,
+            cancellationToken);
+
+        if (registration is null)
+        {
+            return Failure(
+                EventServiceErrorCode.NotFound,
+                "The registration was not found.");
+        }
+
+        if (registration.Status != PendingStatus)
+        {
+            return Failure(
+                EventServiceErrorCode.Conflict,
+                "Only Pending registrations may be approved or rejected.");
+        }
+
+        if (registration.Event.Status != ActiveStatus ||
+            registration.Event.StartUtc <= DateTime.UtcNow)
+        {
+            return Failure(
+                EventServiceErrorCode.Conflict,
+                "The registration cannot be changed after the event starts or leaves Active status.");
+        }
+
+        registration.Status = targetStatus;
+        registration.DecisionReason = reason;
+        registration.ConfirmationReference = targetStatus == ConfirmedStatus
+            ? CreateConfirmationReference()
+            : null;
+        registration.UpdatedUtc = DateTime.UtcNow;
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        return await GetByIdAsync(
+            registrationId,
+            registration.UserId,
+            cancellationToken);
+    }
+
+    private Task<Registration?> GetOwnedRegistrationAsync(
+        Guid registrationId,
+        Guid ownerUserId,
+        CancellationToken cancellationToken) =>
+        _dbContext.Registration
+            .Include(registration => registration.Event)
+            .SingleOrDefaultAsync(
+                registration => registration.RegistrationId == registrationId &&
+                                registration.Event.OwnerUserId == ownerUserId,
+                cancellationToken);
+
     private async Task<EventServiceResult<RegistrationResponse>> GetByIdAsync(
         Guid registrationId,
         Guid userId,
